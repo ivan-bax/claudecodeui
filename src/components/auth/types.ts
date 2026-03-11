@@ -17,6 +17,9 @@ export type AuthSessionPayload = {
 
 export type AuthStatusPayload = {
   needsSetup?: boolean;
+  teleportAuth?: boolean;
+  token?: string;
+  user?: AuthUser;
 };
 
 export type AuthUserPayload = {

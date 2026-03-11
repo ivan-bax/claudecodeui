@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { userDb, appConfigDb } from '../database/db.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { TELEPORT_AUTH } from '../constants/config.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -11,12 +12,28 @@ const validateApiKey = (req, res, next) => {
   if (!process.env.API_KEY) {
     return next();
   }
-  
+
   const apiKey = req.headers['x-api-key'];
   if (apiKey !== process.env.API_KEY) {
     return res.status(401).json({ error: 'Invalid API key' });
   }
   next();
+};
+
+/**
+ * Look up or auto-create a user from the X-Teleport-Username header.
+ * Returns the user row or null if the header is missing.
+ */
+const resolveOrCreateTeleportUser = (username) => {
+  if (!username) return null;
+
+  let user = userDb.getUserByUsername(username);
+  if (user) return user;
+
+  // Auto-create the user with no password (teleport auth)
+  user = userDb.createUser(username, '');
+  console.log(`[Teleport] Auto-created user: ${username}`);
+  return user;
 };
 
 // JWT authentication middleware
@@ -33,6 +50,26 @@ const authenticateToken = async (req, res, next) => {
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
+    }
+  }
+
+  // Teleport mode: trust X-Teleport-Username header
+  if (TELEPORT_AUTH) {
+    const teleportUsername = req.headers['x-teleport-username'];
+    if (!teleportUsername) {
+      return res.status(401).json({ error: 'Access denied. X-Teleport-Username header required.' });
+    }
+
+    try {
+      const user = resolveOrCreateTeleportUser(teleportUsername);
+      if (!user) {
+        return res.status(500).json({ error: 'Teleport auth: Failed to resolve user' });
+      }
+      req.user = { id: user.id, username: user.username };
+      return next();
+    } catch (error) {
+      console.error('Teleport auth error:', error);
+      return res.status(500).json({ error: 'Teleport auth: Internal error' });
     }
   }
 
@@ -89,7 +126,7 @@ const generateToken = (user) => {
 };
 
 // WebSocket authentication function
-const authenticateWebSocket = (token) => {
+const authenticateWebSocket = (token, req) => {
   // Platform mode: bypass token validation, return first user
   if (IS_PLATFORM) {
     try {
@@ -100,6 +137,23 @@ const authenticateWebSocket = (token) => {
       return null;
     } catch (error) {
       console.error('Platform mode WebSocket error:', error);
+      return null;
+    }
+  }
+
+  // Teleport mode: resolve user from header
+  if (TELEPORT_AUTH) {
+    const teleportUsername = req?.headers?.['x-teleport-username'];
+    if (!teleportUsername) return null;
+
+    try {
+      const user = resolveOrCreateTeleportUser(teleportUsername);
+      if (user) {
+        return { userId: user.id, username: user.username };
+      }
+      return null;
+    } catch (error) {
+      console.error('Teleport WebSocket auth error:', error);
       return null;
     }
   }

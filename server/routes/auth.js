@@ -2,14 +2,38 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import { userDb, db } from '../database/db.js';
 import { generateToken, authenticateToken } from '../middleware/auth.js';
+import { TELEPORT_AUTH } from '../constants/config.js';
 
 const router = express.Router();
 
 // Check auth status and setup requirements
 router.get('/status', async (req, res) => {
   try {
+    // Teleport mode: auto-authenticate from header
+    if (TELEPORT_AUTH) {
+      const teleportUsername = req.headers['x-teleport-username'];
+      if (!teleportUsername) {
+        return res.status(401).json({ error: 'X-Teleport-Username header required' });
+      }
+
+      // Look up or auto-create the user
+      let user = userDb.getUserByUsername(teleportUsername);
+      if (!user) {
+        user = userDb.createUser(teleportUsername, '');
+        console.log(`[Teleport] Auto-created user via /status: ${teleportUsername}`);
+      }
+
+      const token = generateToken(user);
+      return res.json({
+        teleportAuth: true,
+        needsSetup: false,
+        token,
+        user: { id: user.id, username: user.username },
+      });
+    }
+
     const hasUsers = await userDb.hasUsers();
-    res.json({ 
+    res.json({
       needsSetup: !hasUsers,
       isAuthenticated: false // Will be overridden by frontend if token exists
     });

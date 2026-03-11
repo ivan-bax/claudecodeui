@@ -82,6 +82,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const statusResponse = await api.auth.status();
       const statusPayload = await parseJsonSafely<AuthStatusPayload>(statusResponse);
 
+      // Teleport auth: server already resolved the user and token
+      if (statusPayload?.teleportAuth && statusPayload.token && statusPayload.user) {
+        setSession(statusPayload.user, statusPayload.token);
+        setNeedsSetup(false);
+        await checkOnboardingStatus();
+        return;
+      }
+
       if (statusPayload?.needsSetup) {
         setNeedsSetup(true);
         return;
@@ -113,7 +121,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [checkOnboardingStatus, clearSession, token]);
+  }, [checkOnboardingStatus, clearSession, setSession, token]);
 
   useEffect(() => {
     if (IS_PLATFORM) {

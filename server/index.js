@@ -294,7 +294,7 @@ const wss = new WebSocketServer({
 
         // Platform mode: always allow connection
         if (IS_PLATFORM) {
-            const user = authenticateWebSocket(null); // Will return first user
+            const user = authenticateWebSocket(null, info.req); // Will return first user
             if (!user) {
                 console.log('[WARN] Platform mode: No user found in database');
                 return false;
@@ -311,7 +311,7 @@ const wss = new WebSocketServer({
             info.req.headers.authorization?.split(' ')[1];
 
         // Verify token
-        const user = authenticateWebSocket(token);
+        const user = authenticateWebSocket(token, info.req);
         if (!user) {
             console.log('[WARN] WebSocket authentication failed');
             return false;
