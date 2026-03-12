@@ -141,21 +141,20 @@ const authenticateWebSocket = (token, req) => {
     }
   }
 
-  // Teleport mode: resolve user from header
+  // Teleport mode: try header first, fall back to JWT token
   if (TELEPORT_AUTH) {
     const teleportUsername = req?.headers?.['x-teleport-username'];
-    if (!teleportUsername) return null;
-
-    try {
-      const user = resolveOrCreateTeleportUser(teleportUsername);
-      if (user) {
-        return { userId: user.id, username: user.username };
+    if (teleportUsername) {
+      try {
+        const user = resolveOrCreateTeleportUser(teleportUsername);
+        if (user) {
+          return { userId: user.id, username: user.username };
+        }
+      } catch (error) {
+        console.error('Teleport WebSocket auth error:', error);
       }
-      return null;
-    } catch (error) {
-      console.error('Teleport WebSocket auth error:', error);
-      return null;
     }
+    // Fall through to JWT validation (browser WebSocket can't set custom headers)
   }
 
   // Normal OSS JWT validation

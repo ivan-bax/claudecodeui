@@ -84,7 +84,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // Teleport auth: server already resolved the user and token
       if (statusPayload?.teleportAuth && statusPayload.token && statusPayload.user) {
-        setSession(statusPayload.user, statusPayload.token);
+        if (!token) {
+          // First load — no stored token yet, accept the server-issued one
+          setSession(statusPayload.user, statusPayload.token);
+        } else {
+          // Already have a token — just sync user info without changing the token.
+          // Changing the token would trigger a re-render loop because checkAuthStatus
+          // depends on `token` and each /status call generates a fresh JWT.
+          setUser(statusPayload.user);
+        }
         setNeedsSetup(false);
         await checkOnboardingStatus();
         return;
