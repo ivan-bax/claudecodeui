@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { userDb, appConfigDb } from '../database/db.js';
-import { IS_PLATFORM } from '../constants/config.js';
-import { TELEPORT_AUTH } from '../constants/config.js';
+import { IS_PLATFORM, TELEPORT_AUTH } from '../constants/config.js';
+import { ensureUserWorkspace } from './workspace-isolation.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -65,6 +65,7 @@ const authenticateToken = async (req, res, next) => {
       if (!user) {
         return res.status(500).json({ error: 'Teleport auth: Failed to resolve user' });
       }
+      await ensureUserWorkspace(teleportUsername);
       req.user = { id: user.id, username: user.username };
       return next();
     } catch (error) {
@@ -148,6 +149,9 @@ const authenticateWebSocket = (token, req) => {
       try {
         const user = resolveOrCreateTeleportUser(teleportUsername);
         if (user) {
+          ensureUserWorkspace(teleportUsername).catch(err =>
+            console.error('[Workspace] WS ensureUserWorkspace error:', err.message)
+          );
           return { userId: user.id, username: user.username };
         }
       } catch (error) {

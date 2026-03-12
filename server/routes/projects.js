@@ -4,6 +4,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import os from 'os';
 import { addProjectManually } from '../projects.js';
+import { validateUserPath } from '../middleware/workspace-isolation.js';
 
 const router = express.Router();
 
@@ -12,8 +13,8 @@ function sanitizeGitError(message, token) {
   return message.replace(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '***');
 }
 
-// Configure allowed workspace root (defaults to user's home directory)
-export const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || os.homedir();
+// Configure allowed workspace root (defaults to PROJECTS_PATH, then user's home directory)
+export const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || process.env.PROJECTS_PATH || os.homedir();
 
 // System-critical paths that should never be used as workspace directories
 export const FORBIDDEN_PATHS = [
@@ -63,21 +64,27 @@ export async function validateWorkspacePath(requestedPath) {
     }
 
     // Additional check for paths starting with forbidden directories
-    for (const forbidden of FORBIDDEN_PATHS) {
-      if (normalizedPath === forbidden ||
-          normalizedPath.startsWith(forbidden + path.sep)) {
-        // Exception: /var/tmp and similar user-accessible paths might be allowed
-        // but /var itself and most /var subdirectories should be blocked
-        if (forbidden === '/var' &&
-            (normalizedPath.startsWith('/var/tmp') ||
-             normalizedPath.startsWith('/var/folders'))) {
-          continue; // Allow these specific cases
-        }
+    // Skip if the path is within the explicitly configured WORKSPACES_ROOT —
+    // the admin chose that root, and containment is enforced later (line ~118).
+    const resolvedRoot = path.resolve(WORKSPACES_ROOT);
+    const isWithinConfiguredRoot = normalizedPath === resolvedRoot ||
+        normalizedPath.startsWith(resolvedRoot + path.sep);
 
-        return {
-          valid: false,
-          error: `Cannot create workspace in system directory: ${forbidden}`
-        };
+    if (!isWithinConfiguredRoot) {
+      for (const forbidden of FORBIDDEN_PATHS) {
+        if (normalizedPath === forbidden ||
+            normalizedPath.startsWith(forbidden + path.sep)) {
+          if (forbidden === '/var' &&
+              (normalizedPath.startsWith('/var/tmp') ||
+               normalizedPath.startsWith('/var/folders'))) {
+            continue;
+          }
+
+          return {
+            valid: false,
+            error: `Cannot create workspace in system directory: ${forbidden}`
+          };
+        }
       }
     }
 
@@ -191,6 +198,15 @@ router.post('/create-workspace', async (req, res) => {
       return res.status(400).json({
         error: 'Invalid workspace path',
         details: validation.error
+      });
+    }
+
+    // Per-user workspace isolation check
+    const userValidation = await validateUserPath(validation.resolvedPath, req.user?.username);
+    if (!userValidation.valid) {
+      return res.status(403).json({
+        error: 'Access denied',
+        details: userValidation.error
       });
     }
 
@@ -354,6 +370,14 @@ router.get('/clone-progress', async (req, res) => {
     const validation = await validateWorkspacePath(workspacePath);
     if (!validation.valid) {
       sendEvent('error', { message: validation.error });
+      res.end();
+      return;
+    }
+
+    // Per-user workspace isolation check
+    const userValidation = await validateUserPath(validation.resolvedPath, req.user?.username);
+    if (!userValidation.valid) {
+      sendEvent('error', { message: `Access denied: ${userValidation.error}` });
       res.end();
       return;
     }

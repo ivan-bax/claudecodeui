@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import os from 'os';
 import { extractProjectDirectory } from '../projects.js';
+import { getUserWorkspaceRoot } from '../middleware/workspace-isolation.js';
 import { detectTaskMasterMCPServer } from '../utils/mcp-detector.js';
 import { broadcastTaskMasterProjectUpdate, broadcastTaskMasterTasksUpdate } from '../utils/taskmaster-websocket.js';
 
@@ -351,7 +352,7 @@ router.get('/detect-all', async (req, res) => {
     try {
         // Import getProjects from the projects module
         const { getProjects } = await import('../projects.js');
-        const projects = await getProjects();
+        const projects = await getProjects(null, { workspaceFilter: getUserWorkspaceRoot(req.user?.username) });
 
         // Run detection for all projects in parallel
         const detectionPromises = projects.map(async (project) => {

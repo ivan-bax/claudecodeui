@@ -13,6 +13,7 @@ import { spawnGemini } from '../gemini-cli.js';
 import { Octokit } from '@octokit/rest';
 import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS } from '../../shared/modelConstants.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { validateUserPath } from '../middleware/workspace-isolation.js';
 
 const router = express.Router();
 
@@ -872,6 +873,14 @@ router.post('/', validateExternalApiKey, async (req, res) => {
   let writer = null;
 
   try {
+    // Per-user workspace isolation: validate provided projectPath
+    if (projectPath) {
+      const userValidation = await validateUserPath(projectPath, req.user?.username);
+      if (!userValidation.valid) {
+        return res.status(403).json({ error: `Access denied: ${userValidation.error}` });
+      }
+    }
+
     // Determine the final project path
     if (githubUrl) {
       // Clone repository (to projectPath if provided, otherwise generate path)

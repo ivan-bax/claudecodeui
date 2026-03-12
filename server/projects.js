@@ -381,7 +381,7 @@ async function extractProjectDirectory(projectName) {
   }
 }
 
-async function getProjects(progressCallback = null) {
+async function getProjects(progressCallback = null, options = {}) {
   const claudeDir = path.join(os.homedir(), '.claude', 'projects');
   const config = await loadProjectConfig();
   const projects = [];
@@ -636,6 +636,14 @@ async function getProjects(progressCallback = null) {
       current: totalProjects,
       total: totalProjects
     });
+  }
+
+  // Apply per-user workspace filter if provided
+  const { workspaceFilter } = options;
+  if (workspaceFilter) {
+    return projects.filter(p =>
+      p.fullPath && (p.fullPath === workspaceFilter || p.fullPath.startsWith(workspaceFilter + path.sep))
+    );
   }
 
   return projects;

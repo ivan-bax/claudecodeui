@@ -70,6 +70,7 @@ import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './d
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
+import { getUserWorkspaceRoot, validateUserPath } from './middleware/workspace-isolation.js';
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
 
@@ -146,23 +147,27 @@ async function setupProjectsWatcher() {
                 // Clear project directory cache when files change
                 clearProjectDirectoryCache();
 
-                // Get updated projects list
-                const updatedProjects = await getProjects(broadcastProgress);
+                // Get updated projects list (unfiltered)
+                const allProjects = await getProjects(broadcastProgress);
 
-                // Notify all connected clients about the project changes
-                const updateMessage = JSON.stringify({
-                    type: 'projects_updated',
-                    projects: updatedProjects,
-                    timestamp: new Date().toISOString(),
-                    changeType: eventType,
-                    changedFile: path.relative(rootPath, filePath),
-                    watchProvider: provider
-                });
-
+                // Notify all connected clients about the project changes,
+                // filtering per user when workspace isolation is active
                 connectedClients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(updateMessage);
-                    }
+                    if (client.readyState !== WebSocket.OPEN) return;
+
+                    const clientRoot = getUserWorkspaceRoot(client.user?.username);
+                    const filtered = clientRoot
+                        ? allProjects.filter(p => p.fullPath && (p.fullPath === clientRoot || p.fullPath.startsWith(clientRoot + path.sep)))
+                        : allProjects;
+
+                    client.send(JSON.stringify({
+                        type: 'projects_updated',
+                        projects: filtered,
+                        timestamp: new Date().toISOString(),
+                        changeType: eventType,
+                        changedFile: path.relative(rootPath, filePath),
+                        watchProvider: provider
+                    }));
                 });
 
             } catch (error) {
@@ -490,7 +495,8 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
 
 app.get('/api/projects', authenticateToken, async (req, res) => {
     try {
-        const projects = await getProjects(broadcastProgress);
+        const userRoot = getUserWorkspaceRoot(req.user?.username);
+        const projects = await getProjects(broadcastProgress, { workspaceFilter: userRoot });
         res.json(projects);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -499,6 +505,12 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
 
 app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, res) => {
     try {
+        // Defense-in-depth: validate project belongs to user's workspace
+        const projectDir = await extractProjectDirectory(req.params.projectName);
+        if (projectDir) {
+            const pv = await validateUserPath(projectDir, req.user?.username);
+            if (!pv.valid) return res.status(403).json({ error: pv.error });
+        }
         const { limit = 5, offset = 0 } = req.query;
         const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
         applyCustomSessionNames(result.sessions, 'claude');
@@ -659,13 +671,14 @@ app.get('/api/search/conversations', authenticateToken, async (req, res) => {
     }
 });
 
-const expandWorkspacePath = (inputPath) => {
+const expandWorkspacePath = (inputPath, rootOverride) => {
+    const root = rootOverride || WORKSPACES_ROOT;
     if (!inputPath) return inputPath;
     if (inputPath === '~') {
-        return WORKSPACES_ROOT;
+        return root;
     }
     if (inputPath.startsWith('~/') || inputPath.startsWith('~\\')) {
-        return path.join(WORKSPACES_ROOT, inputPath.slice(2));
+        return path.join(root, inputPath.slice(2));
     }
     return inputPath;
 };
@@ -677,9 +690,10 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
 
         console.log('[API] Browse filesystem request for path:', dirPath);
         console.log('[API] WORKSPACES_ROOT is:', WORKSPACES_ROOT);
-        // Default to home directory if no path provided
-        const defaultRoot = WORKSPACES_ROOT;
-        let targetPath = dirPath ? expandWorkspacePath(dirPath) : defaultRoot;
+        // Default to user workspace root when isolation is active, otherwise WORKSPACES_ROOT
+        const userRoot = getUserWorkspaceRoot(req.user?.username);
+        const defaultRoot = userRoot || WORKSPACES_ROOT;
+        let targetPath = dirPath ? expandWorkspacePath(dirPath, defaultRoot) : defaultRoot;
 
         // Resolve and normalize the path
         targetPath = path.resolve(targetPath);
@@ -690,6 +704,12 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: validation.error });
         }
         const resolvedPath = validation.resolvedPath || targetPath;
+
+        // Per-user workspace isolation check
+        const userPathValidation = await validateUserPath(resolvedPath, req.user?.username);
+        if (!userPathValidation.valid) {
+            return res.status(403).json({ error: userPathValidation.error });
+        }
 
         // Security check - ensure path is accessible
         try {
@@ -1397,6 +1417,9 @@ app.post('/api/projects/:projectName/files/upload', authenticateToken, uploadFil
 
 // WebSocket connection handler that routes based on URL path
 wss.on('connection', (ws, request) => {
+    // Propagate authenticated user from verifyClient
+    ws.user = request.user;
+
     const url = request.url;
     console.log('[INFO] Client connected to:', url);
 
@@ -1458,6 +1481,16 @@ function handleChatConnection(ws, request) {
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
+
+            // Per-user workspace isolation: validate project path before any CLI call
+            const pathToCheck = data.options?.projectPath || data.options?.cwd;
+            if (pathToCheck && ['claude-command', 'cursor-command', 'codex-command', 'gemini-command', 'cursor-resume'].includes(data.type)) {
+                const validation = await validateUserPath(pathToCheck, ws.user?.username);
+                if (!validation.valid) {
+                    writer.send({ type: 'error', error: `Access denied: ${validation.error}` });
+                    return;
+                }
+            }
 
             if (data.type === 'claude-command') {
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
@@ -1618,6 +1651,15 @@ function handleShellConnection(ws) {
 
             if (data.type === 'init') {
                 const projectPath = data.projectPath || process.cwd();
+
+                // Per-user workspace isolation: validate shell project path
+                const shellValidation = await validateUserPath(projectPath, ws.user?.username);
+                if (!shellValidation.valid) {
+                    ws.send(JSON.stringify({ type: 'error', data: `Access denied: ${shellValidation.error}` }));
+                    ws.close();
+                    return;
+                }
+
                 const sessionId = data.sessionId;
                 const hasSession = data.hasSession;
                 const provider = data.provider || 'claude';
