@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { userDb, appConfigDb } from '../database/db.js';
-import { IS_PLATFORM, TELEPORT_AUTH } from '../constants/config.js';
+import { IS_PLATFORM, AUTH_TELEPORT } from '../constants/config.js';
 import { ensureUserWorkspace } from './workspace-isolation.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
@@ -54,7 +54,7 @@ const authenticateToken = async (req, res, next) => {
   }
 
   // Teleport mode: trust X-Teleport-Username header
-  if (TELEPORT_AUTH) {
+  if (AUTH_TELEPORT) {
     const teleportUsername = req.headers['x-teleport-username'];
     if (!teleportUsername) {
       return res.status(401).json({ error: 'Access denied. X-Teleport-Username header required.' });
@@ -143,7 +143,7 @@ const authenticateWebSocket = (token, req) => {
   }
 
   // Teleport mode: try header first, fall back to JWT token
-  if (TELEPORT_AUTH) {
+  if (AUTH_TELEPORT) {
     const teleportUsername = req?.headers?.['x-teleport-username'];
     if (teleportUsername) {
       try {

@@ -9,20 +9,49 @@
 import { promises as fsPromises } from 'fs';
 import path from 'path';
 import os from 'os';
+import { AUTH_TELEPORT } from '../constants/config.js';
+import { getUserWorkspaceRoot } from '../middleware/workspace-isolation.js';
+
+/**
+ * Build the list of config file paths to search for MCP configuration.
+ * In Teleport mode with a username, the user's workspace is checked first.
+ * @param {string} [username] - Authenticated username
+ * @returns {string[]} Ordered list of config paths to try
+ */
+function getConfigPaths(username) {
+    const paths = [];
+
+    // In Teleport mode, prioritize user workspace configs
+    if (AUTH_TELEPORT && username) {
+        const userRoot = getUserWorkspaceRoot(username);
+        if (userRoot) {
+            paths.push(
+                path.join(userRoot, '.mcp.json'),
+                path.join(userRoot, '.claude.json')
+            );
+        }
+    }
+
+    // Fall back to server process home directory
+    const homeDir = os.homedir();
+    paths.push(
+        path.join(homeDir, '.claude.json'),
+        path.join(homeDir, '.claude', 'settings.json')
+    );
+
+    return paths;
+}
 
 /**
  * Check if task-master-ai MCP server is configured
  * Reads directly from Claude configuration files like claude-cli.js does
+ * @param {string} [username] - Authenticated username (for Teleport workspace lookup)
  * @returns {Promise<Object>} MCP detection result
  */
-export async function detectTaskMasterMCPServer() {
+export async function detectTaskMasterMCPServer(username) {
     try {
         // Read Claude configuration files directly (same logic as mcp.js)
-        const homeDir = os.homedir();
-        const configPaths = [
-            path.join(homeDir, '.claude.json'),
-            path.join(homeDir, '.claude', 'settings.json')
-        ];
+        const configPaths = getConfigPaths(username);
         
         let configData = null;
         let configPath = null;
@@ -147,15 +176,12 @@ export async function detectTaskMasterMCPServer() {
 
 /**
  * Get all configured MCP servers (not just TaskMaster)
+ * @param {string} [username] - Authenticated username (for Teleport workspace lookup)
  * @returns {Promise<Object>} All MCP servers configuration
  */
-export async function getAllMCPServers() {
+export async function getAllMCPServers(username) {
     try {
-        const homeDir = os.homedir();
-        const configPaths = [
-            path.join(homeDir, '.claude.json'),
-            path.join(homeDir, '.claude', 'settings.json')
-        ];
+        const configPaths = getConfigPaths(username);
         
         let configData = null;
         let configPath = null;

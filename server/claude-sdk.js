@@ -24,6 +24,8 @@ import {
   notifyRunStopped,
   notifyUserIfEnabled
 } from './services/notification-orchestrator.js';
+import { AUTH_TELEPORT, PROJECTS_PATH } from './constants/config.js';
+import { getUserWorkspaceRoot } from './middleware/workspace-isolation.js';
 
 const activeSessions = new Map();
 const pendingToolApprovals = new Map();
@@ -400,61 +402,119 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
 }
 
 /**
- * Loads MCP server configurations from ~/.claude.json
- * @param {string} cwd - Current working directory for project-specific configs
- * @returns {Object|null} MCP servers object or null if none found
+ * Reads and parses a JSON config file, returning null if not found or invalid.
+ * @param {string} configPath - Absolute path to the config file
+ * @returns {Promise<Object|null>}
  */
-async function loadMcpConfig(cwd) {
+async function readJsonConfig(configPath) {
   try {
-    const claudeConfigPath = path.join(os.homedir(), '.claude.json');
+    await fs.access(configPath);
+  } catch {
+    return null;
+  }
+  try {
+    const content = await fs.readFile(configPath, 'utf8');
+    return JSON.parse(content);
+  } catch (error) {
+    console.error(`Failed to parse ${configPath}:`, error.message);
+    return null;
+  }
+}
 
-    // Check if config file exists
-    try {
-      await fs.access(claudeConfigPath);
-    } catch (error) {
-      // File doesn't exist, return null
-      console.log('No ~/.claude.json found, proceeding without MCP servers');
-      return null;
+/**
+ * Extracts MCP servers from a parsed config object.
+ * Supports both .claude.json format (mcpServers + claudeProjects) and
+ * .mcp.json format (mcpServers at root).
+ * @param {Object} config - Parsed config object
+ * @param {string} cwd - Current working directory for project-specific configs
+ * @param {string} source - Label for logging
+ * @returns {Object} MCP servers object (may be empty)
+ */
+function extractMcpServers(config, cwd, source) {
+  let mcpServers = {};
+
+  if (config.mcpServers && typeof config.mcpServers === 'object') {
+    mcpServers = { ...config.mcpServers };
+    console.log(`[MCP] Loaded ${Object.keys(mcpServers).length} servers from ${source}`);
+  }
+
+  // .claude.json project-specific overrides
+  if (config.claudeProjects && cwd) {
+    const projectConfig = config.claudeProjects[cwd];
+    if (projectConfig?.mcpServers && typeof projectConfig.mcpServers === 'object') {
+      mcpServers = { ...mcpServers, ...projectConfig.mcpServers };
+      console.log(`[MCP] Loaded ${Object.keys(projectConfig.mcpServers).length} project-specific servers from ${source}`);
     }
+  }
 
-    // Read and parse config file
-    let claudeConfig;
-    try {
-      const configContent = await fs.readFile(claudeConfigPath, 'utf8');
-      claudeConfig = JSON.parse(configContent);
-    } catch (error) {
-      console.error('Failed to parse ~/.claude.json:', error.message);
-      return null;
-    }
+  return mcpServers;
+}
 
-    // Extract MCP servers (merge global and project-specific)
+/**
+ * Loads MCP server configurations.
+ *
+ * Search order:
+ * 1. If Teleport auth is active and a username is provided, check the user's
+ *    workspace for .mcp.json and .claude.json
+ * 2. Fall back to the server process home directory (~/.claude.json)
+ *
+ * @param {string} cwd - Current working directory for project-specific configs
+ * @param {string} [username] - Authenticated username (for Teleport workspace lookup)
+ * @returns {Promise<Object|null>} MCP servers object or null if none found
+ */
+async function loadMcpConfig(cwd, username) {
+  try {
     let mcpServers = {};
 
-    // Add global MCP servers
-    if (claudeConfig.mcpServers && typeof claudeConfig.mcpServers === 'object') {
-      mcpServers = { ...claudeConfig.mcpServers };
-      console.log(`Loaded ${Object.keys(mcpServers).length} global MCP servers`);
-    }
+    // In Teleport mode, look for MCP config in the user's workspace first
+    if (AUTH_TELEPORT && username) {
+      const userRoot = getUserWorkspaceRoot(username);
+      if (userRoot) {
+        const userConfigPaths = [
+          path.join(userRoot, '.mcp.json'),
+          path.join(userRoot, '.claude.json'),
+        ];
 
-    // Add/override with project-specific MCP servers
-    if (claudeConfig.claudeProjects && cwd) {
-      const projectConfig = claudeConfig.claudeProjects[cwd];
-      if (projectConfig && projectConfig.mcpServers && typeof projectConfig.mcpServers === 'object') {
-        mcpServers = { ...mcpServers, ...projectConfig.mcpServers };
-        console.log(`Loaded ${Object.keys(projectConfig.mcpServers).length} project-specific MCP servers`);
+        for (const configPath of userConfigPaths) {
+          const config = await readJsonConfig(configPath);
+          if (config) {
+            const servers = extractMcpServers(config, cwd, configPath);
+            mcpServers = { ...mcpServers, ...servers };
+          }
+        }
+
+        if (Object.keys(mcpServers).length > 0) {
+          console.log(`[MCP] Total servers loaded for user ${username}: ${Object.keys(mcpServers).length}`);
+          return mcpServers;
+        }
+
+        console.log(`[MCP] No MCP config found in user workspace ${userRoot}`);
       }
     }
 
-    // Return null if no servers found
+    // Fall back to server process home directory
+    const homeConfigPaths = [
+      path.join(os.homedir(), '.claude.json'),
+      path.join(os.homedir(), '.claude', 'settings.json'),
+    ];
+
+    for (const configPath of homeConfigPaths) {
+      const config = await readJsonConfig(configPath);
+      if (config) {
+        const servers = extractMcpServers(config, cwd, configPath);
+        mcpServers = { ...mcpServers, ...servers };
+      }
+    }
+
     if (Object.keys(mcpServers).length === 0) {
-      console.log('No MCP servers configured');
+      console.log('[MCP] No MCP servers configured');
       return null;
     }
 
-    console.log(`Total MCP servers loaded: ${Object.keys(mcpServers).length}`);
+    console.log(`[MCP] Total servers loaded: ${Object.keys(mcpServers).length}`);
     return mcpServers;
   } catch (error) {
-    console.error('Error loading MCP config:', error.message);
+    console.error('[MCP] Error loading MCP config:', error.message);
     return null;
   }
 }
@@ -485,8 +545,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(options);
 
-    // Load MCP configuration
-    const mcpServers = await loadMcpConfig(options.cwd);
+    // Load MCP configuration (pass username for Teleport workspace lookup)
+    const mcpServers = await loadMcpConfig(options.cwd, options.username);
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;
     }

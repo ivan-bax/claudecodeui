@@ -5,6 +5,8 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { spawn } from 'child_process';
+import { AUTH_TELEPORT } from '../constants/config.js';
+import { getUserWorkspaceRoot } from '../middleware/workspace-isolation.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -348,12 +350,26 @@ router.get('/cli/get/:name', async (req, res) => {
 router.get('/config/read', async (req, res) => {
   try {
     console.log('📖 Reading MCP servers from Claude config files');
-    
+
+    const configPaths = [];
+
+    // In Teleport mode, check user workspace first
+    if (AUTH_TELEPORT && req.user?.username) {
+      const userRoot = getUserWorkspaceRoot(req.user.username);
+      if (userRoot) {
+        configPaths.push(
+          path.join(userRoot, '.mcp.json'),
+          path.join(userRoot, '.claude.json')
+        );
+      }
+    }
+
+    // Fall back to server process home directory
     const homeDir = os.homedir();
-    const configPaths = [
+    configPaths.push(
       path.join(homeDir, '.claude.json'),
       path.join(homeDir, '.claude', 'settings.json')
-    ];
+    );
     
     let configData = null;
     let configPath = null;

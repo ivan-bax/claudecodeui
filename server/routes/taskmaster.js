@@ -246,7 +246,7 @@ router.get('/installation-status', async (req, res) => {
         const installationStatus = await checkTaskMasterInstallation();
         
         // Also check for MCP server configuration
-        const mcpStatus = await detectTaskMasterMCPServer();
+        const mcpStatus = await detectTaskMasterMCPServer(req.user?.username);
         
         res.json({
             success: true,
@@ -308,7 +308,7 @@ router.get('/detect/:projectName', async (req, res) => {
         // Run detection in parallel
         const [taskMasterResult, mcpResult] = await Promise.all([
             detectTaskMasterFolder(projectPath),
-            detectTaskMasterMCPServer()
+            detectTaskMasterMCPServer(req.user?.username)
         ]);
 
         // Determine overall status
@@ -371,7 +371,7 @@ router.get('/detect-all', async (req, res) => {
                 
                 const [taskMasterResult, mcpResult] = await Promise.all([
                     detectTaskMasterFolder(projectPath),
-                    detectTaskMasterMCPServer()
+                    detectTaskMasterMCPServer(req.user?.username)
                 ]);
 
                 // Determine status

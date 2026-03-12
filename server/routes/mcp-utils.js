@@ -17,7 +17,7 @@ const router = express.Router();
  */
 router.get('/taskmaster-server', async (req, res) => {
     try {
-        const result = await detectTaskMasterMCPServer();
+        const result = await detectTaskMasterMCPServer(req.user?.username);
         res.json(result);
     } catch (error) {
         console.error('TaskMaster MCP detection error:', error);
@@ -34,7 +34,7 @@ router.get('/taskmaster-server', async (req, res) => {
  */
 router.get('/all-servers', async (req, res) => {
     try {
-        const result = await getAllMCPServers();
+        const result = await getAllMCPServers(req.user?.username);
         res.json(result);
     } catch (error) {
         console.error('MCP servers detection error:', error);

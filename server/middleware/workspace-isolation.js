@@ -1,12 +1,12 @@
 import path from 'path';
 import { promises as fs } from 'fs';
-import { TELEPORT_AUTH, PROJECTS_PATH } from '../constants/config.js';
+import { AUTH_TELEPORT, PROJECTS_PATH } from '../constants/config.js';
 
 /**
  * Check whether per-user workspace isolation is active.
  */
 export function isIsolationActive() {
-  return TELEPORT_AUTH && !!PROJECTS_PATH;
+  return AUTH_TELEPORT && !!PROJECTS_PATH;
 }
 
 /**

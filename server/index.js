@@ -1497,8 +1497,12 @@ function handleChatConnection(ws, request) {
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
 
-                // Use Claude Agents SDK
-                await queryClaudeSDK(data.command, data.options, writer);
+                // Use Claude Agents SDK — inject username for Teleport MCP workspace lookup
+                const claudeOptions = { ...data.options };
+                if (ws.user?.username) {
+                    claudeOptions.username = ws.user.username;
+                }
+                await queryClaudeSDK(data.command, claudeOptions, writer);
             } else if (data.type === 'cursor-command') {
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');

@@ -2,7 +2,7 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import { userDb, db } from '../database/db.js';
 import { generateToken, authenticateToken } from '../middleware/auth.js';
-import { TELEPORT_AUTH } from '../constants/config.js';
+import { AUTH_TELEPORT } from '../constants/config.js';
 
 const router = express.Router();
 
@@ -10,7 +10,7 @@ const router = express.Router();
 router.get('/status', async (req, res) => {
   try {
     // Teleport mode: auto-authenticate from header
-    if (TELEPORT_AUTH) {
+    if (AUTH_TELEPORT) {
       const teleportUsername = req.headers['x-teleport-username'];
       if (!teleportUsername) {
         return res.status(401).json({ error: 'X-Teleport-Username header required' });
