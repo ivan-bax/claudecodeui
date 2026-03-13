@@ -526,6 +526,11 @@ async function getProjects(progressCallback = null, options = {}) {
       .length;
   }
 
+  // Build a set of fullPaths already seen from filesystem projects to prevent
+  // duplicates when a config entry resolves to the same directory as an existing
+  // filesystem project (e.g. due to encoding differences between the UI and CLI).
+  const seenFullPaths = new Set(projects.map(p => p.fullPath).filter(Boolean));
+
   // Add manually configured projects that don't exist as folders yet
   for (const [projectName, projectConfig] of Object.entries(config)) {
     if (!existingProjects.has(projectName) && projectConfig.manuallyAdded) {
@@ -552,6 +557,12 @@ async function getProjects(progressCallback = null, options = {}) {
           actualProjectDir = projectName.replace(/-/g, '/');
         }
       }
+
+      // Skip if a filesystem project already covers this path (encoding mismatch)
+      if (seenFullPaths.has(actualProjectDir)) {
+        continue;
+      }
+      seenFullPaths.add(actualProjectDir);
 
       const project = {
         name: projectName,
@@ -1249,6 +1260,13 @@ async function addProjectManually(projectPath, displayName = null) {
 
   if (config[projectName]) {
     throw new Error(`Project already configured for path: ${absolutePath}`);
+  }
+
+  // Check if another config entry already points to the same path (encoding mismatch)
+  for (const [existingName, existingConfig] of Object.entries(config)) {
+    if (existingConfig.originalPath === absolutePath) {
+      throw new Error(`Project already configured for path: ${absolutePath}`);
+    }
   }
 
   // Allow adding projects even if the directory exists - this enables tracking

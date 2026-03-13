@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { FolderPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ErrorBanner from './components/ErrorBanner';
@@ -34,6 +34,7 @@ export default function ProjectCreationWizard({
   const [step, setStep] = useState<WizardStep>(1);
   const [formState, setFormState] = useState<WizardFormState>(initialFormState);
   const [isCreating, setIsCreating] = useState(false);
+  const creatingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [cloneProgress, setCloneProgress] = useState('');
 
@@ -97,6 +98,8 @@ export default function ProjectCreationWizard({
   }, []);
 
   const handleCreate = useCallback(async () => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
     setIsCreating(true);
     setError(null);
     setCloneProgress('');
@@ -137,6 +140,7 @@ export default function ProjectCreationWizard({
           : t('projectWizard.errors.failedToCreate');
       setError(errorMessage);
     } finally {
+      creatingRef.current = false;
       setIsCreating(false);
     }
   }, [formState, onClose, onProjectCreated, t]);
